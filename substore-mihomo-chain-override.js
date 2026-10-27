@@ -1,19 +1,15 @@
-// Sub-Store Mihomo 覆写脚本：链式代理版（前置 → 落地）
-// 改造自 opob07/singbox-anltls 的 mihomo-overwrite-no-fallback.yaml
+// Sub-Store「mihomo 配置」文件专用脚本：给节点加链式代理（前置 → 落地）
 //
-// 为什么不用 YAML + proxy-providers：
-//   Sub-Store 的覆写里节点是由它自己注入到 proxies 的，如果再挂一个 proxy-providers 去直拉机场原始订阅，
-//   就会出现两套节点（Sub-Store 管理的 + provider 直拉的），改名/去重/过滤全部不同步。
-//   所以这里改成：给 Sub-Store 注入的节点复制一份副本，直接打上 dialer-proxy，与节点列表完全同步。
+// 用法：文件 → 操作 → 添加 → 脚本 → 填本文件 URL
+//       位置必须放在「从订阅添加节点」之后（要先有节点）
+// 特点：不改动你的 YAML 模板，只做四件事
+//       1. 复制一份节点副本，名字加「链-」前缀，并打上 dialer-proxy
+//       2. 建「🔗 前置代理」「🔗 链式代理」两个组
+//       3. 把「🔗 链式代理」加进各个选择组
+//       4. 让普通分组排除「链-」副本，避免意外两跳
+//       换订阅时节点变了，副本自动跟着变，不用改任何东西
 //
-// 使用位置：Sub-Store → 订阅 / 组合订阅 → 「脚本操作」（与 powerfullz 的 JS 覆写同一个位置）
-// 注意：这是 JS 脚本，不要放进「覆写」（那里只吃 YAML），也不要建成 YAML 类型的文件。
-// 脚本协议：globalThis.main = (config) => newConfig
-//
-// 可选参数（脚本链接后面加 #a=b&c=d）：
-//   front=🔗 前置代理   前置组名
-//   prefix=链-          副本节点名前缀
-//   skipudp=0           设为 0 时不再自动剔除 hy2/tuic/wg 等 UDP 类节点（默认剔除）
+// 可选参数（URL 后加 #a=b&c=d）：front= / chain= / prefix= / skipudp=0
 
 const ARGS = (() => {
   try {
@@ -24,145 +20,82 @@ const ARGS = (() => {
 })();
 
 const FRONT = ARGS.front || '🔗 前置代理';
-const CHAIN = ARGS['chain'] || '🔗 链式代理';
+const CHAIN = ARGS.chain || '🔗 链式代理';
 const PREFIX = ARGS.prefix || '链-';
 const SKIP_UDP = ARGS.skipudp === undefined ? true : !/^(0|false)$/i.test(String(ARGS.skipudp));
 
-// 这些协议靠 UDP 传输，无法被前置代理的 TCP 隧道转发，选它做落地一定连不上
+// 这些协议走 UDP，前置无法用 TCP 隧道转发，选它做落地一定连不上
 const UDP_TYPES = ['hysteria', 'hysteria2', 'tuic', 'wireguard'];
 
-// 名称前缀可能含正则特殊字符，转义后再用于 exclude-filter
-const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const PREFIX_RE = '^' + esc(PREFIX);
+const PREFIX_RE = '^' + String(PREFIX).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const TOP_GROUPS = ['🚀 默认代理', '🤖 AI', '🍎 Apple', '🎬 Emby'];
+// 这些组不排除副本：全部节点要能手动挑落地
+const KEEP_ALL = ['🌐 全部节点', 'GLOBAL', CHAIN];
 
-const RULES = [
-  'AND,((RULE-SET,cn!_domain),(DST-PORT,443),(NETWORK,UDP)),REJECT',
-  'RULE-SET,private_ip,DIRECT,no-resolve',
-  'RULE-SET,private_domain,DIRECT',
-  'RULE-SET,ai_domain,🤖 AI',
-  'RULE-SET,microsoftcn_domain,DIRECT',
-  'RULE-SET,applecn_domain,DIRECT',
-  'RULE-SET,apple_domain,🍎 Apple',
-  'RULE-SET,emby_domain,🎬 Emby',
-  'RULE-SET,steamcn_domain,DIRECT',
-  'RULE-SET,cn!_domain,🚀 默认代理',
-  'RULE-SET,apple_ip,🍎 Apple',
-  'RULE-SET,cn_ip,DIRECT',
-  'MATCH,🐟 漏网之鱼',
-];
-
-const MRS = { type: 'http', interval: 86400, format: 'mrs' };
-const RULE_PROVIDERS = {
-  private_domain: Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/private.mrs' }),
-  ai_domain: { type: 'http', interval: 86400, behavior: 'domain', format: 'yaml', url: 'https://ddgksf2013.top/filter/Ai.yaml' },
-  microsoftcn_domain: Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/microsoft@cn.mrs' }),
-  applecn_domain: Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/apple@cn.mrs' }),
-  apple_domain: Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/apple.mrs' }),
-  emby_domain: { type: 'http', interval: 86400, behavior: 'classical', format: 'text', url: 'https://raw.githubusercontent.com/opob07/singbox-anltls/main/Emby.list' },
-  steamcn_domain: Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/steam@cn.mrs' }),
-  'cn!_domain': Object.assign({}, MRS, { behavior: 'domain', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geosite/geolocation-!cn.mrs' }),
-  apple_ip: Object.assign({}, MRS, { behavior: 'ipcidr', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo-lite/geoip/apple.mrs' }),
-  cn_ip: Object.assign({}, MRS, { behavior: 'ipcidr', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/cn.mrs' }),
-  private_ip: Object.assign({}, MRS, { behavior: 'ipcidr', url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/meta/geo/geoip/private.mrs' }),
-};
-
-// 与模板一致的全局设置（external-controller / external-ui 交给客户端自己管，避免端口打架）
-const BASE = {
-  mode: 'rule',
-  'mixed-port': 7890,
-  'allow-lan': true,
-  'bind-address': '*',
-  ipv6: false,
-  'unified-delay': true,
-  'tcp-concurrent': true,
-  'log-level': 'info',
-  'keep-alive-idle': 600,
-  'keep-alive-interval': 15,
-  profile: { 'store-selected': true, 'store-fake-ip': true },
-  sniffer: {
-    enable: true,
-    sniff: {
-      HTTP: { ports: [80, '8080-8880'], 'override-destination': true },
-      TLS: { ports: [443, 8443] },
-      QUIC: { ports: [443, 8443] },
-    },
-    'skip-domain': ['Mijia Cloud', '+.push.apple.com'],
-  },
-  tun: {
-    enable: true,
-    stack: 'mixed',
-    'dns-hijack': ['any:53', 'tcp://any:53'],
-    'auto-route': true,
-    'auto-redirect': true,
-    'auto-detect-interface': true,
-  },
-  dns: {
-    enable: true,
-    'cache-algorithm': 'arc',
-    ipv6: false,
-    'enhanced-mode': 'fake-ip',
-    'fake-ip-range': '198.18.0.0/16',
-    'fake-ip-filter-mode': 'blacklist',
-    'fake-ip-filter': ['*', '+.lan', '+.local', '+.market.xiaomi.com'],
-    'default-nameserver': ['223.5.5.5'],
-    nameserver: ['https://dns.alidns.com/dns-query', 'https://doh.pub/dns-query'],
-  },
-};
-
-function buildGroups(chainNames) {
-  const base = ['♻️ 自动选择', CHAIN, '🇭🇰 香港节点', '🇯🇵 日本节点', '🇸🇬 狮城节点', '🇺🇲 美国节点', '🇰🇷 韩国节点', '🌐 全部节点', 'DIRECT'];
-
-  const groups = [
-    // 前置/中转：只能选真实节点，排除「链-」副本，避免自己套自己
-    { name: FRONT, type: 'select', 'include-all': true, filter: '^((?!(DIRECT)).)*$', 'exclude-filter': PREFIX_RE },
-    // 落地/出口：只放带 dialer-proxy 的副本节点
-    { name: CHAIN, type: 'select', proxies: chainNames.length ? chainNames.slice() : ['DIRECT'] },
-  ];
-
-  TOP_GROUPS.forEach((name) => groups.push({ name, type: 'select', proxies: base.slice() }));
-  groups.push({ name: '🐟 漏网之鱼', type: 'select', proxies: ['🚀 默认代理'].concat(base) });
-
-  const country = [
-    ['🇭🇰 香港节点', '(?=.*(港|HK|(?i)Hong))^((?!(台|日|韩|新|深|美)).)*$'],
-    ['🇯🇵 日本节点', '(?=.*(日|JP|(?i)Japan))^((?!(港|台|韩|新|美)).)*$'],
-    ['🇸🇬 狮城节点', '(?=.*(新加坡|坡|狮城|SG|Singapore))^((?!(台|日|韩|深|美)).)*$'],
-    ['🇺🇲 美国节点', '(?=.*(美|US|(?i)States|America))^((?!(港|台|韩|新|日)).)*$'],
-    ['🇰🇷 韩国节点', '(?=.*(韩|KR|(?i)Korea))^((?!(港|台|日|新|美)).)*$'],
-  ];
-  country.forEach(([name, filter]) => {
-    groups.push({ name, type: 'url-test', tolerance: 20, interval: 300, 'include-all': true, 'exclude-filter': PREFIX_RE, filter });
-  });
-
-  groups.push({ name: '♻️ 自动选择', type: 'url-test', tolerance: 20, interval: 300, 'include-all': true, 'exclude-filter': PREFIX_RE, filter: '^((?!(DIRECT)).)*$' });
-  groups.push({ name: '🌐 全部节点', type: 'select', 'include-all': true });
-
-  return groups;
+function addExcludeFilter(group) {
+  const cur = group['exclude-filter'];
+  if (cur && String(cur).indexOf(PREFIX_RE) >= 0) return;
+  group['exclude-filter'] = cur ? String(cur) + '|' + PREFIX_RE : PREFIX_RE;
 }
 
 function main(config) {
   config = config || {};
-  const nodes = Array.isArray(config.proxies) ? config.proxies : [];
-  if (!nodes.length) throw new Error('[链式覆写] 没有拿到节点，请检查订阅是否正常');
 
-  const chainNodes = [];
-  nodes.forEach((node) => {
-    if (!node || !node.name) return;
-    const type = String(node.type || '').toLowerCase();
-    if (SKIP_UDP && UDP_TYPES.indexOf(type) >= 0) return;
-    const copy = Object.assign({}, node);
-    copy.name = PREFIX + node.name;
+  const all = Array.isArray(config.proxies) ? config.proxies : [];
+  if (!all.length) {
+    throw new Error('[链式] 没有拿到节点，请把本脚本放在「从订阅添加节点」之后');
+  }
+
+  // 清掉上次运行可能残留的副本，保证重复执行结果一致
+  const nodes = all.filter((n) => n && n.name && String(n.name).indexOf(PREFIX) !== 0);
+
+  const chain = [];
+  nodes.forEach((n) => {
+    if (SKIP_UDP && UDP_TYPES.indexOf(String(n.type || '').toLowerCase()) >= 0) return;
+    const copy = Object.assign({}, n);
+    copy.name = PREFIX + n.name;
     copy['dialer-proxy'] = FRONT;
-    chainNodes.push(copy);
+    chain.push(copy);
   });
 
-  const out = Object.assign({}, BASE, config);
-  out.proxies = nodes.concat(chainNodes);
-  out['proxy-groups'] = buildGroups(chainNodes.map((n) => n.name));
-  out['rule-providers'] = RULE_PROVIDERS;
-  out.rules = RULES.slice();
-  return out;
+  config.proxies = nodes.concat(chain);
+
+  const groups = Array.isArray(config['proxy-groups']) ? config['proxy-groups'] : [];
+  const find = (name) => groups.filter((g) => g && g.name === name)[0];
+
+  // 前置组：只能选真实节点
+  let front = find(FRONT);
+  if (!front) {
+    front = { name: FRONT, type: 'select', 'include-all': true };
+    groups.unshift(front);
+  }
+  if (front['include-all'] || front['include-all-proxies']) addExcludeFilter(front);
+
+  // 链式组：只放副本
+  let chainGroup = find(CHAIN);
+  if (!chainGroup) {
+    chainGroup = { name: CHAIN, type: 'select', proxies: [] };
+    groups.push(chainGroup);
+  }
+  chainGroup.proxies = chain.length ? chain.map((n) => n.name) : ['DIRECT'];
+
+  groups.forEach((g) => {
+    if (!g || KEEP_ALL.indexOf(g.name) >= 0) return;
+
+    if (g['include-all'] || g['include-all-proxies']) addExcludeFilter(g);
+
+    // 把链式组塞进带 DIRECT 的选择组（跳过拦截组之类）
+    if (g.name !== FRONT && g.type === 'select' && Array.isArray(g.proxies)) {
+      if (g.proxies.indexOf(CHAIN) >= 0) return;
+      if (g.proxies.indexOf('REJECT') >= 0) return;
+      const directAt = g.proxies.indexOf('DIRECT');
+      if (directAt >= 0) g.proxies.splice(directAt, 0, CHAIN);
+      else if (g.proxies.length >= 3) g.proxies.push(CHAIN);
+    }
+  });
+
+  config['proxy-groups'] = groups;
+  return config;
 }
 
 globalThis.main = main;

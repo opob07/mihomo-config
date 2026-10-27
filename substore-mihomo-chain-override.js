@@ -1,20 +1,19 @@
-/**
- * Sub-Store Mihomo 覆写脚本：链式代理版（前置 → 落地）
- * 改造自 opob07/singbox-anltls 的 mihomo-overwrite-no-fallback.yaml
- *
- * 为什么不用 YAML + proxy-providers：
- *   Sub-Store 的覆写里节点是由它自己注入到 proxies 的，如果再挂一个 proxy-providers 去直拉机场原始订阅，
- *   就会出现两套节点（Sub-Store 管理的 + provider 直拉的），改名/去重/过滤全部不同步。
- *   所以这里改成：给 Sub-Store 注入的节点复制一份副本，直接打上 dialer-proxy，与节点列表完全同步。
- *
- * 使用位置：Sub-Store → 订阅 / 组合订阅 → 「脚本操作」（与 powerfullz 的 JS 覆写同一个位置）
- * 脚本协议：globalThis.main = (config) => newConfig
- *
- * 可选参数（脚本链接后面加 #a=b&c=d）：
- *   front=🔗 前置代理   前置组名
- *   prefix=链-          副本节点名前缀
- *   skipudp=0           设为 0 时不再自动剔除 hy2/tuic/wg 等 UDP 类节点（默认剔除）
- */
+// Sub-Store Mihomo 覆写脚本：链式代理版（前置 → 落地）
+// 改造自 opob07/singbox-anltls 的 mihomo-overwrite-no-fallback.yaml
+//
+// 为什么不用 YAML + proxy-providers：
+//   Sub-Store 的覆写里节点是由它自己注入到 proxies 的，如果再挂一个 proxy-providers 去直拉机场原始订阅，
+//   就会出现两套节点（Sub-Store 管理的 + provider 直拉的），改名/去重/过滤全部不同步。
+//   所以这里改成：给 Sub-Store 注入的节点复制一份副本，直接打上 dialer-proxy，与节点列表完全同步。
+//
+// 使用位置：Sub-Store → 订阅 / 组合订阅 → 「脚本操作」（与 powerfullz 的 JS 覆写同一个位置）
+// 注意：这是 JS 脚本，不要放进「覆写」（那里只吃 YAML），也不要建成 YAML 类型的文件。
+// 脚本协议：globalThis.main = (config) => newConfig
+//
+// 可选参数（脚本链接后面加 #a=b&c=d）：
+//   front=🔗 前置代理   前置组名
+//   prefix=链-          副本节点名前缀
+//   skipudp=0           设为 0 时不再自动剔除 hy2/tuic/wg 等 UDP 类节点（默认剔除）
 
 const ARGS = (() => {
   try {

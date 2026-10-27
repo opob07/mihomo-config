@@ -29,17 +29,21 @@
   - 否则 → 当作 **JS 执行**，`main(config)` 收到解析后的配置对象，返回值会被 dump 回 YAML
 - 因此：把 JS 放进「文件内容」或「覆写」框会报 YAML 解析错误。
 
-### 推荐做法（JS，一步到位）
+### 推荐做法（脚本，随订阅自动更新）
 
-1. 文件管理 → 新建 → **mihomo 配置**
-2. 「来源」选择你的订阅 / 组合订阅
-3. 「脚本操作」→ 添加 → 脚本 → 填：
+你原来的 YAML **一个字都不用改**，只要在「操作」里加一个脚本：
+
+1. 文件 → 「操作」→ 添加 → 脚本 → 填：
 
 ```
-https://cdn.jsdelivr.net/gh/opob07/mihomo-config@main/substore-mihomo-chain-override.js
+https://raw.githubusercontent.com/opob07/mihomo-config/main/substore-mihomo-chain-override.js
 ```
 
-4. 保存 → 预览，就能看到带「🔗 前置代理 / 🔗 链式代理」的完整配置
+2. **顺序必须放在「从订阅添加节点」之后**（脚本要先拿到节点）
+
+脚本只做四件事：复制节点副本并打上 `dialer-proxy`、建「🔗 前置代理 / 🔗 链式代理」两个组、把链式组加进各选择组、让普通分组排除 `链-` 副本。
+
+换订阅、换节点、改名都不用再管，副本自动跟着变。
 
 可选参数（链接后加 `#`）：`front=🔗 前置代理`、`prefix=链-`、`skipudp=0`
 

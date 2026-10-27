@@ -6,10 +6,10 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `mihomo-overwrite-no-fallback-chain.yaml` | 客户端覆写用（Clash Verge Rev / Mihomo Party / FlClash 的「覆写」） |
-| `substore-mihomo-chain-override.js` | Sub-Store 覆写脚本（JS），节点与 Sub-Store 同步 |
+| `mihomo-overwrite-no-fallback-chain.yaml` | 客户端覆写（Clash Verge Rev / Mihomo Party / FlClash）；也可作为 Sub-Store「脚本操作」的 YAML 覆写 |
+| `substore-mihomo-chain-override.js` | Sub-Store「脚本操作」的 JS 脚本，链式与 Sub-Store 节点同步 |
 
-## 客户端用法（Clash Verge Rev / Mihomo Party / FlClash）
+## 一、客户端用法（Clash Verge Rev / Mihomo Party / FlClash）
 
 1. 把 `mihomo-overwrite-no-fallback-chain.yaml` 作为覆写规则导入，或粘贴到覆写规则里。
 2. 修改 `proxy-providers.chain_sub.url`，填入你自己的机场订阅链接（与主订阅同一个即可）。
@@ -17,20 +17,40 @@
 
 原理：mihomo 的 `proxy-groups` 不支持 `dialer-proxy`，`relay` 类型已废弃，所以用 `proxy-providers` + `override.dialer-proxy` 给副本节点打上链式。
 
-## Sub-Store 用法
+## 二、Sub-Store 用法
 
-在订阅 / 组合订阅的「脚本操作」里填入本仓库脚本链接（与 powerfullz 的 JS 覆写同一位置）：
+### 关键机制（容易踩坑）
+
+「文件管理 → 新建/导入 → **mihomo 配置**」这个类型里：
+
+- **文件内容不是模板**。当「来源」选订阅 / 组合订阅时，Sub-Store 只生成 `proxies:`，其余配置全部来自「**脚本操作**」。
+- 「脚本操作」里的 Script Operator **两种模式都支持**（按内容自动判断）：
+  - 内容能按 YAML 解析 → 当作 **YAML 补丁**，`deepMerge` 进配置
+  - 否则 → 当作 **JS 执行**，`main(config)` 收到解析后的配置对象，返回值会被 dump 回 YAML
+- 因此：把 JS 放进「文件内容」或「覆写」框会报 YAML 解析错误。
+
+### 推荐做法（JS，一步到位）
+
+1. 文件管理 → 新建 → **mihomo 配置**
+2. 「来源」选择你的订阅 / 组合订阅
+3. 「脚本操作」→ 添加 → 脚本 → 填：
 
 ```
-https://cdn.jsdelivr.net/gh/<用户名>/<仓库名>@main/substore-mihomo-chain-override.js
+https://cdn.jsdelivr.net/gh/opob07/mihomo-config@main/substore-mihomo-chain-override.js
 ```
 
-可选参数（链接后加 `#`）：`front=🔗 前置代理`、`prefix=链-`、`skipudp=0`。
+4. 保存 → 预览，就能看到带「🔗 前置代理 / 🔗 链式代理」的完整配置
 
-Sub-Store 的覆写里节点由它自己注入，不能写 `proxies:`，也不该再用 `proxy-providers` 二次拉订阅，所以脚本改为给节点复制副本并直接打 `dialer-proxy`。
+可选参数（链接后加 `#`）：`front=🔗 前置代理`、`prefix=链-`、`skipudp=0`
+
+### 备选做法（纯 YAML）
+
+「脚本操作」里改用 YAML 补丁（把 `mihomo-overwrite-no-fallback-chain.yaml` 的内容粘进去，或填它的 raw 链接），
+但必须把 `chain_sub.url` 改成**机场原始订阅**——这条路的链式节点由内核直连 provider 拉取，不经过 Sub-Store 管理。
 
 ## 注意
 
-- 落地节点不要用 hy2 / tuic / wg 等 UDP 协议，前置无法用 TCP 隧道转发，一定连不上；reality / shadowtls 也可能失败。脚本默认自动剔除 UDP 类节点。
+- 落地节点不要用 hy2 / tuic / wg 等 UDP 协议，前置无法用 TCP 隧道转发，一定连不上；reality / shadowtls 也可能失败。JS 版默认自动剔除 UDP 类节点。
 - 链式流量在机场侧算双份，速度也会多一跳损耗。
 - 分组用 `exclude-filter: ^链-` 排除副本节点，避免它们混进国家分组造成意外两跳。
+- 给 Sub-Store 的 JS 脚本不要用 `/* */` 或 JSDoc 注释（`*` 会被 YAML 解析器当成 alias 报错），只用 `//`。
